@@ -22,10 +22,10 @@
     .status-bar { margin-top: 15px; font-weight: 500; font-size: 0.95rem; }
     .error-box { margin-top: 15px; padding: 12px; background: #fef2f2; border: 1px solid #fecaca; border-radius: 6px; color: #dc2626; font-size: 0.9rem; word-break: break-all; white-space: pre-wrap; display: none; }
     
-    /* 簡譜輸出區塊 (專門適配 PDF A4 匯出) */
+    /* 簡譜輸出區塊 */
     .sheet-wrapper { margin-top: 25px; padding: 20px; background: #ffffff; border: 1px solid #e2e8f0; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
     .model-info-footer { margin-top: 20px; padding-top: 10px; border-top: 1px solid #e2e8f0; font-size: 0.85rem; color: #64748b; display: flex; align-items: center; justify-content: space-between; }
-    .badge { display: inline-block; padding: 2px 10px; font-size: 0.8rem; font-weight: 600; border-radius: 9999px; background: #e0e7ff; color: #3730a3; }
+    .badge { display: inline-block; padding: 2px 10px; font-size: 0.8rem; font-weight: 600; border-radius: 9999px; background: #e0e7ff; color: #3730a3; font-family: monospace; }
   </style>
 </head>
 <body>
@@ -74,6 +74,7 @@
       reader.onload = function(e) {
         const img = new Image();
         img.onload = function() {
+          // 限制長邊最高 1600px 進行優化壓縮
           const maxDim = 1600;
           let width = img.width;
           let height = img.height;
@@ -126,166 +127,4 @@
       statusText.innerText = "正在辨識樂譜並轉換首調簡譜中，請稍候...";
 
       try {
-        const res = await fetch(WORKER_URL, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            imageBase64: processedBase64,
-            mimeType: processedMimeType
-          })
-        });
-
-        const resData = await res.json().catch(() => ({}));
-
-        if (!res.ok) {
-          const errorMsg = resData.details || resData.error || `HTTP 狀態碼 ${res.status}`;
-          throw new Error(errorMsg);
-        }
-
-        // 讀取並顯示生成的模型資訊
-        const resolvedModel = res.headers.get("X-Resolved-Model") || "Gemini Flash";
-        modelBadge.innerText = resolvedModel;
-        timestamp.innerText = `生成時間：${new Date().toLocaleString("zh-TW")}`;
-
-        const rawText = resData.candidates[0].content.parts[0].text;
-        const scoreData = JSON.parse(rawText);
-        lastGeneratedTitle = scoreData.title || "簡譜樂譜";
-
-        statusText.innerText = "轉換成功！已在下方完成多行排版。";
-        sheet.style.display = "block";
-        pdfBtn.style.display = "inline-block";
-
-        renderMultiLineJianpu(scoreData, "scoreContainer");
-      } catch (err) {
-        statusText.innerText = "轉換失敗";
-        errorBox.innerText = `錯誤詳情：\n${err.message}`;
-        errorBox.style.display = "block";
-        console.error(err);
-      } finally {
-        btn.disabled = false;
-      }
-    }
-
-    // 多行自動換行簡譜排版引擎
-    function renderMultiLineJianpu(data, targetId) {
-      const target = document.getElementById(targetId);
-      const pageWidth = 850;
-      const marginX = 40;
-      const measuresPerLine = 4; // 每行固定 4 個小節
-      const measureWidth = (pageWidth - marginX * 2) / measuresPerLine;
-      const lineHeight = 80;
-
-      const measures = data.measures || [];
-      const totalLines = Math.ceil(measures.length / measuresPerLine) || 1;
-      const totalSvgHeight = 110 + totalLines * lineHeight + 20;
-
-      let svg = `<svg id="jianpuSvg" width="${pageWidth}" height="${totalSvgHeight}" xmlns="http://www.w3.org/2000/svg" style="font-family: Arial, sans-serif; background: #ffffff;">`;
-      
-      // 標題與調號
-      svg += `<text x="${pageWidth / 2}" y="40" font-size="22" font-weight="bold" text-anchor="middle">${data.title || "簡譜"}</text>`;
-      svg += `<text x="${marginX}" y="75" font-size="16" font-weight="600">1 = ${data.key || "C"}   ${data.timeSignature || "4/4"}</text>`;
-
-      let currentLine = 0;
-      let startY = 130;
-
-      for (let i = 0; i < measures.length; i++) {
-        currentLine = Math.floor(i / measuresPerLine);
-        const col = i % measuresPerLine;
-        const lineY = startY + currentLine * lineHeight;
-        const startX = marginX + col * measureWidth;
-        const endX = startX + measureWidth;
-
-        // 若為該行開頭，繪製首小節線
-        if (col === 0) {
-          svg += `<line x1="${startX}" y1="${lineY - 24}" x2="${startX}" y2="${lineY + 12}" stroke="#000" stroke-width="1.5" />`;
-        }
-
-        const measure = measures[i];
-        const notes = measure.notes || [];
-        const noteStep = (measureWidth - 15) / Math.max(notes.length, 1);
-
-        notes.forEach((n, idx) => {
-          const noteX = startX + 12 + idx * noteStep + (noteStep / 2);
-
-          // 音符 / 休止符
-          svg += `<text x="${noteX}" y="${lineY}" font-size="22" text-anchor="middle" font-weight="bold">${n.pitch}</text>`;
-
-          // 附點
-          if (n.dotted) {
-            svg += `<circle cx="${noteX + 11}" cy="${lineY - 4}" r="2" fill="#000" />`;
-          }
-
-          // 高音點 / 低音點
-          if (n.octave > 0) {
-            svg += `<circle cx="${noteX}" cy="${lineY - 24}" r="2.2" fill="#000" />`;
-          } else if (n.octave < 0) {
-            svg += `<circle cx="${noteX}" cy="${lineY + 10}" r="2.2" fill="#000" />`;
-          }
-
-          // 減時線 (0.5: 單底線, 0.25: 雙底線)
-          if (n.duration === 0.5) {
-            svg += `<line x1="${noteX - 9}" y1="${lineY + 6}" x2="${noteX + 9}" y2="${lineY + 6}" stroke="#000" stroke-width="1.8" />`;
-          } else if (n.duration === 0.25) {
-            svg += `<line x1="${noteX - 9}" y1="${lineY + 6}" x2="${noteX + 9}" y2="${lineY + 6}" stroke="#000" stroke-width="1.8" />`;
-            svg += `<line x1="${noteX - 9}" y1="${lineY + 10}" x2="${noteX + 9}" y2="${lineY + 10}" stroke="#000" stroke-width="1.8" />`;
-          }
-
-          // 增時線 (時值大於 1 拍)
-          if (n.duration > 1) {
-            const dashes = Math.floor(n.duration) - 1;
-            for (let d = 0; d < dashes; d++) {
-              const dashX = noteX + ((d + 1) * 16);
-              svg += `<text x="${dashX}" y="${lineY - 2}" font-size="22" text-anchor="middle" font-weight="bold">-</text>`;
-            }
-          }
-        });
-
-        // 小節線
-        const isLastMeasure = (i === measures.length - 1);
-        if (isLastMeasure) {
-          // 終止線 (細線 + 粗線)
-          svg += `<line x1="${endX - 5}" y1="${lineY - 24}" x2="${endX - 5}" y2="${lineY + 12}" stroke="#000" stroke-width="1" />`;
-          svg += `<line x1="${endX}" y1="${lineY - 24}" x2="${endX}" y2="${lineY + 12}" stroke="#000" stroke-width="3.5" />`;
-        } else {
-          svg += `<line x1="${endX}" y1="${lineY - 24}" x2="${endX}" y2="${lineY + 12}" stroke="#000" stroke-width="1.5" />`;
-        }
-      }
-
-      svg += `</svg>`;
-      target.innerHTML = svg;
-    }
-
-    // 匯出為 PDF 檔案
-    async function exportToPdf() {
-      const sheetElement = document.getElementById("exportableSheet");
-      const pdfBtn = document.getElementById("downloadPdfBtn");
-
-      pdfBtn.disabled = true;
-      pdfBtn.innerText = "正在產出 PDF...";
-
-      try {
-        const canvas = await html2canvas(sheetElement, {
-          scale: 2, // 2倍高解析度繪製
-          backgroundColor: "#ffffff",
-          useCORS: true
-        });
-
-        const imgData = canvas.toDataURL("image/png");
-        const { jsPDF } = window.jspdf;
-        const pdf = new jsPDF("p", "mm", "a4");
-
-        const pdfWidth = pdf.internal.pageSize.getWidth();
-        const pdfHeight = (canvas.height * pdfWidth) / canvas.width;
-
-        pdf.addImage(imgData, "PNG", 0, 10, pdfWidth, pdfHeight);
-        pdf.save(`${lastGeneratedTitle}_簡譜.pdf`);
-      } catch (err) {
-        alert("PDF 產出失敗：" + err.message);
-      } finally {
-        pdfBtn.disabled = false;
-        pdfBtn.innerText = "下載為 PDF 檔";
-      }
-    }
-  </script>
-</body>
-</html>
+        const res = await fetch(WORKER_URL
