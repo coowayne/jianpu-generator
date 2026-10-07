@@ -14,7 +14,8 @@
     .preview-img { max-width: 100%; max-height: 250px; border-radius: 6px; border: 1px solid #e2e8f0; }
     .btn { background: #2563eb; color: #fff; border: none; padding: 10px 20px; border-radius: 6px; font-size: 1rem; cursor: pointer; margin-top: 15px; }
     .btn:disabled { background: #94a3b8; cursor: not-allowed; }
-    .status-bar { margin-top: 15px; font-weight: 500; font-size: 0.95rem; }
+    .status-bar { margin-top: 15px; font-weight: 500; font-size: 0.95rem; display: flex; align-items: center; gap: 8px; }
+    .badge { display: inline-block; padding: 2px 8px; font-size: 0.8rem; font-weight: 600; border-radius: 9999px; background: #e0e7ff; color: #3730a3; }
     .score-output { margin-top: 25px; overflow-x: auto; background: #ffffff; border: 1px solid #e2e8f0; border-radius: 8px; padding: 15px; }
   </style>
 </head>
@@ -33,13 +34,15 @@
       <button class="btn" id="convertBtn" onclick="startConvert()">開始轉換為簡譜</button>
     </div>
 
-    <div class="status-bar" id="statusBar"></div>
+    <div class="status-bar" id="statusBar">
+      <span id="statusText"></span>
+      <span class="badge" id="modelBadge" style="display: none;"></span>
+    </div>
     <div class="score-output" id="scoreContainer"></div>
   </div>
 
   <script>
-    // 【請替換】填入你剛部署的 Cloudflare Worker URL
-    const WORKER_URL = "https://<你的Worker名稱>.<子網域>.workers.dev";
+    const WORKER_URL = "https://jianpu-omr-api.wandering-poetry-ecb7.workers.dev";
 
     let selectedBase64 = "";
     let selectedMimeType = "";
@@ -53,7 +56,6 @@
 
       reader.onload = function(e) {
         const fullBase64 = e.target.result;
-        // 去除 data:image/xxx;base64, 前綴以傳給 API
         selectedBase64 = fullBase64.split(",")[1];
 
         document.getElementById("imagePreview").src = fullBase64;
@@ -65,11 +67,13 @@
 
     async function startConvert() {
       const btn = document.getElementById("convertBtn");
-      const status = document.getElementById("statusBar");
+      const statusText = document.getElementById("statusText");
+      const modelBadge = document.getElementById("modelBadge");
       const container = document.getElementById("scoreContainer");
 
       btn.disabled = true;
-      status.innerText = "正在辨識樂譜並轉換首調簡譜中，請稍候...";
+      statusText.innerText = "正在辨識樂譜並轉換首調簡譜中，請稍候...";
+      modelBadge.style.display = "none";
       container.innerHTML = "";
 
       try {
@@ -84,23 +88,27 @@
 
         if (!res.ok) throw new Error(`HTTP 錯誤：${res.status}`);
 
+        const resolvedModel = res.headers.get("X-Resolved-Model");
+        if (resolvedModel) {
+          modelBadge.innerText = resolvedModel;
+          modelBadge.style.display = "inline-block";
+        }
+
         const result = await res.json();
         
-        // 取得 Gemini 回傳的 JSON 字串並解析
         const rawText = result.candidates[0].content.parts[0].text;
         const scoreData = JSON.parse(rawText);
 
-        status.innerText = "轉換成功！";
+        statusText.innerText = "轉換成功！";
         renderJianpu(scoreData, "scoreContainer");
       } catch (err) {
-        status.innerText = `轉換失敗：${err.message}`;
+        statusText.innerText = `轉換失敗：${err.message}`;
         console.error(err);
       } finally {
         btn.disabled = false;
       }
     }
 
-    // SVG 簡譜渲染引擎
     function renderJianpu(data, targetId) {
       const target = document.getElementById(targetId);
       let x = 40;
