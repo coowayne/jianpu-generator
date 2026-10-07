@@ -69,7 +69,6 @@
     const dropZone = document.getElementById("dropZone");
     const fileInput = document.getElementById("fileInput");
 
-    // 解決冒泡衝突
     dropZone.addEventListener("click", () => {
       fileInput.click();
     });
@@ -83,7 +82,6 @@
       if (file) handleProcessFile(file);
     });
 
-    // 拖曳上傳支援
     dropZone.addEventListener("dragover", (e) => {
       e.preventDefault();
       dropZone.classList.add("dragover");
@@ -177,7 +175,7 @@
           throw new Error(errorMsg);
         }
 
-        modelBadge.innerText = resData.resolvedModel || "unknown";
+        modelBadge.innerText = resData.resolvedModel || "gemini-3.8-flash";
         timestamp.innerText = `生成時間：${new Date().toLocaleString("zh-TW")}`;
 
         const rawText = resData.candidates[0].content.parts[0].text;
@@ -199,16 +197,14 @@
       }
     }
 
-    // 音符相容解析函式（相容物件鍵名 p, pitch, note, value 及字串格式）
+    // 音符相容解析器（支援物件及字串格式）
     function parseNoteToken(token) {
       if (!token) return { pitch: "0", octave: 0, duration: 1, dotted: false };
 
-      // 1. 若為物件結構
       if (typeof token === "object") {
         let rawPitch = token.p !== undefined ? token.p : (token.pitch !== undefined ? token.pitch : (token.note !== undefined ? token.note : (token.value !== undefined ? token.value : "0")));
         let pitch = String(rawPitch).trim();
         
-        // 移除非數字雜訊，保留 0-7
         const cleanMatch = pitch.match(/[0-7]/);
         pitch = cleanMatch ? cleanMatch[0] : "0";
 
@@ -223,7 +219,6 @@
         return { pitch, octave, duration, dotted };
       }
 
-      // 2. 若為字串結構 (例如 "1:0:1" 或 "5:1:0.5.")
       const str = String(token).trim();
       const parts = str.split(":");
       
@@ -247,6 +242,7 @@
       return { pitch, octave, duration, dotted };
     }
 
+    // 多行簡譜渲染引擎（增時線槽位平分排版）
     function renderMultiLineJianpu(data, targetId) {
       const target = document.getElementById(targetId);
       const pageWidth = 850;
@@ -255,14 +251,13 @@
       const measureWidth = (pageWidth - marginX * 2) / measuresPerLine;
       const lineHeight = 80;
 
-      // 相容緊湊版 data.m 與標準版 data.measures
       const rawMeasures = data.m || data.measures || [];
       const totalLines = Math.ceil(rawMeasures.length / measuresPerLine) || 1;
       const totalSvgHeight = 110 + totalLines * lineHeight + 20;
 
       let svg = `<svg id="jianpuSvg" width="${pageWidth}" height="${totalSvgHeight}" xmlns="http://www.w3.org/2000/svg" style="font-family: Arial, sans-serif; background: #ffffff;">`;
       
-      // 標題與調號
+      // 樂譜標題與調號
       svg += `<text x="${pageWidth / 2}" y="40" font-size="22" font-weight="bold" text-anchor="middle">${data.title || "簡譜"}</text>`;
       svg += `<text x="${marginX}" y="75" font-size="16" font-weight="600">1 = ${data.key || "C"}   ${data.timeSignature || "4/4"}</text>`;
 
@@ -288,41 +283,60 @@
           rawNotes = measureItem.notes || measureItem.n || [];
         }
 
-        const notes = rawNotes.map(parseNoteToken);
-        const noteStep = (measureWidth - 15) / Math.max(notes.length, 1);
+        const parsedNotes = rawNotes.map(parseNoteToken);
 
-        notes.forEach((n, idx) => {
-          const noteX = startX + 12 + idx * noteStep + (noteStep / 2);
+        // 將增時線 (-) 視為獨立顯示槽位（Slot），平均分配小節寬度
+        const visualSlots = [];
+        parsedNotes.forEach(n => {
+          visualSlots.push({
+            type: "note",
+            pitch: n.pitch,
+            octave: n.octave,
+            duration: n.duration,
+            dotted: n.dotted
+          });
 
-          // 繪製音符
-          svg += `<text x="${noteX}" y="${lineY}" font-size="22" text-anchor="middle" font-weight="bold">${n.pitch}</text>`;
-
-          // 附點
-          if (n.dotted) {
-            svg += `<circle cx="${noteX + 11}" cy="${lineY - 4}" r="2" fill="#000" />`;
-          }
-
-          // 八度高低音點
-          if (n.octave > 0) {
-            svg += `<circle cx="${noteX}" cy="${lineY - 24}" r="2.2" fill="#000" />`;
-          } else if (n.octave < 0) {
-            svg += `<circle cx="${noteX}" cy="${lineY + 10}" r="2.2" fill="#000" />`;
-          }
-
-          // 減時線
-          if (n.duration === 0.5) {
-            svg += `<line x1="${noteX - 9}" y1="${lineY + 6}" x2="${noteX + 9}" y2="${lineY + 6}" stroke="#000" stroke-width="1.8" />`;
-          } else if (n.duration === 0.25) {
-            svg += `<line x1="${noteX - 9}" y1="${lineY + 6}" x2="${noteX + 9}" y2="${lineY + 6}" stroke="#000" stroke-width="1.8" />`;
-            svg += `<line x1="${noteX - 9}" y1="${lineY + 10}" x2="${noteX + 9}" y2="${lineY + 10}" stroke="#000" stroke-width="1.8" />`;
-          }
-
-          // 增時線
           if (n.duration > 1) {
-            const dashes = Math.floor(n.duration) - 1;
-            for (let d = 0; d < dashes; d++) {
-              const dashX = noteX + ((d + 1) * 16);
-              svg += `<text x="${dashX}" y="${lineY - 2}" font-size="22" text-anchor="middle" font-weight="bold">-</text>`;
+            const extraDashes = Math.floor(n.duration) - 1;
+            for (let d = 0; d < extraDashes; d++) {
+              visualSlots.push({
+                type: "dash"
+              });
+            }
+          }
+        });
+
+        const slotCount = Math.max(visualSlots.length, 1);
+        const slotWidth = (measureWidth - 20) / slotCount;
+
+        visualSlots.forEach((slot, idx) => {
+          const itemX = startX + 10 + idx * slotWidth + (slotWidth / 2);
+
+          if (slot.type === "dash") {
+            // 獨立等距繪製增時線
+            svg += `<text x="${itemX}" y="${lineY - 2}" font-size="22" text-anchor="middle" font-weight="bold">-</text>`;
+          } else {
+            // 繪製音符
+            svg += `<text x="${itemX}" y="${lineY}" font-size="22" text-anchor="middle" font-weight="bold">${slot.pitch}</text>`;
+
+            // 附點
+            if (slot.dotted) {
+              svg += `<circle cx="${itemX + 11}" cy="${lineY - 4}" r="2" fill="#000" />`;
+            }
+
+            // 高音點 / 低音點
+            if (slot.octave > 0) {
+              svg += `<circle cx="${itemX}" cy="${lineY - 24}" r="2.2" fill="#000" />`;
+            } else if (slot.octave < 0) {
+              svg += `<circle cx="${itemX}" cy="${lineY + 10}" r="2.2" fill="#000" />`;
+            }
+
+            // 減時線 (半拍、十六分音符)
+            if (slot.duration === 0.5) {
+              svg += `<line x1="${itemX - 9}" y1="${lineY + 6}" x2="${itemX + 9}" y2="${lineY + 6}" stroke="#000" stroke-width="1.8" />`;
+            } else if (slot.duration === 0.25) {
+              svg += `<line x1="${itemX - 9}" y1="${lineY + 6}" x2="${itemX + 9}" y2="${lineY + 6}" stroke="#000" stroke-width="1.8" />`;
+              svg += `<line x1="${itemX - 9}" y1="${lineY + 10}" x2="${itemX + 9}" y2="${lineY + 10}" stroke="#000" stroke-width="1.8" />`;
             }
           }
         });
