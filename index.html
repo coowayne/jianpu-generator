@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>五線譜轉簡譜工具</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; margin: 20px; background: #f8fafc; color: #1e293b; }
+    .container { max-width: 900px; margin: 0 auto; background: #fff; padding: 24px; border-radius: 12px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1); }
+    h1 { font-size: 1.5rem; margin-bottom: 1rem; }
+    .upload-zone { border: 2px dashed #cbd5e1; border-radius: 8px; padding: 30px; text-align: center; cursor: pointer; transition: border-color 0.2s; }
+    .upload-zone:hover { border-color: #3b82f6; }
+    .preview-container { margin-top: 15px; display: none; text-align: center; }
+    .preview-img { max-width: 100%; max-height: 250px; border-radius: 6px; border: 1px solid #e2e8f0; }
+    .btn { background: #2563eb; color: #fff; border: none; padding: 10px 20px; border-radius: 6px; font-size: 1rem; cursor: pointer; margin-top: 15px; }
+    .btn:disabled { background: #94a3b8; cursor: not-allowed; }
+    .status-bar { margin-top: 15px; font-weight: 500; font-size: 0.95rem; }
+    .score-output { margin-top: 25px; overflow-x: auto; background: #ffffff; border: 1px solid #e2e8f0; border-radius: 8px; padding: 15px; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>五線譜轉簡譜工具</h1>
+    
+    <div class="upload-zone" id="dropZone" onclick="document.getElementById('fileInput').click()">
+      <p id="uploadText">點擊或拖曳五線譜圖片至此（支援 PNG / JPG）</p>
+      <input type="file" id="fileInput" accept="image/*" style="display: none;" onchange="handleFileSelect(event)">
+    </div>
+
+    <div class="preview-container" id="previewContainer">
+      <img id="imagePreview" class="preview-img" alt="樂譜預覽">
+      <br>
+      <button class="btn" id="convertBtn" onclick="startConvert()">開始轉換為簡譜</button>
+    </div>
+
+    <div class="status-bar" id="statusBar"></div>
+    <div class="score-output" id="scoreContainer"></div>
+  </div>
+
+  <script>
+    // 【請替換】填入你剛部署的 Cloudflare Worker URL
+    const WORKER_URL = "https://<你的Worker名稱>.<子網域>.workers.dev";
+
+    let selectedBase64 = "";
+    let selectedMimeType = "";
+
+    function handleFileSelect(event) {
+      const file = event.target.files[0];
+      if (!file) return;
+
+      selectedMimeType = file.type || "image/jpeg";
+      const reader = new FileReader();
+
+      reader.onload = function(e) {
+        const fullBase64 = e.target.result;
+        // 去除 data:image/xxx;base64, 前綴以傳給 API
+        selectedBase64 = fullBase64.split(",")[1];
+
+        document.getElementById("imagePreview").src = fullBase64;
+        document.getElementById("previewContainer").style.display = "block";
+        document.getElementById("uploadText").innerText = `已選擇：${file.name}`;
+      };
+      reader.readAsDataURL(file);
+    }
+
+    async function startConvert() {
+      const btn = document.getElementById("convertBtn");
+      const status = document.getElementById("statusBar");
+      const container = document.getElementById("scoreContainer");
+
+      btn.disabled = true;
+      status.innerText = "正在辨識樂譜並轉換首調簡譜中，請稍候...";
+      container.innerHTML = "";
+
+      try {
+        const res = await fetch(WORKER_URL, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            imageBase64: selectedBase64,
+            mimeType: selectedMimeType
+          })
+        });
+
+        if (!res.ok) throw new Error(`HTTP 錯誤：${res.status}`);
+
+        const result = await res.json();
+        
+        // 取得 Gemini 回傳的 JSON 字串並解析
+        const rawText = result.candidates[0].content.parts[0].text;
+        const scoreData = JSON.parse(rawText);
+
+        status.innerText = "轉換成功！";
+        renderJianpu(scoreData, "scoreContainer");
+      } catch (err) {
+        status.innerText = `轉換失敗：${err.message}`;
+        console.error(err);
+      } finally {
+        btn.disabled = false;
+      }
+    }
+
+    // SVG 簡譜渲染引擎
+    function renderJianpu(data, targetId) {
+      const target = document.getElementById(targetId);
+      let x = 40;
+      let y = 100;
+      const noteSpacing = 38;
+
+      let svg = `<svg width="1000" height="300" xmlns="http://www.w3.org/2000/svg" style="font-family: Arial, sans-serif;">`;
+      
+      // 標題與調號資訊
+      svg += `<text x="500" y="35" font-size="22" font-weight="bold" text-anchor="middle">${data.title || "簡譜"}</text>`;
+      svg += `<text x="40" y="65" font-size="16" font-weight="500">1 = ${data.key || "C"}   ${data.timeSignature || "4/4"}</text>`;
+      
+      // 開頭小節線
+      svg += `<line x1="${x}" y1="${y - 25}" x2="${x}" y2="${y + 12}" stroke="#000" stroke-width="1.5" />`;
+      x += 20;
+
+      if (data.measures && Array.isArray(data.measures)) {
+        data.measures.forEach(m => {
+          m.notes.forEach(n => {
+            // 繪製音符數字或休止符
+            svg += `<text x="${x}" y="${y}" font-size="24" text-anchor="middle" font-weight="bold">${n.pitch}</text>`;
+
+            // 附點
+            if (n.dotted) {
+              svg += `<circle cx="${x + 12}" cy="${y - 4}" r="2" fill="#000" />`;
+            }
+
+            // 高低音點 (octave: 1 為高音, -1 為低音)
+            if (n.octave > 0) {
+              svg += `<circle cx="${x}" cy="${y - 26}" r="2.5" fill="#000" />`;
+            } else if (n.octave < 0) {
+              svg += `<circle cx="${x}" cy="${y + 10}" r="2.5" fill="#000" />`;
+            }
+
+            // 減時線 (duration: 0.5 單底線, 0.25 雙底線)
+            if (n.duration === 0.5) {
+              svg += `<line x1="${x - 10}" y1="${y + 6}" x2="${x + 10}" y2="${y + 6}" stroke="#000" stroke-width="1.8" />`;
+            } else if (n.duration === 0.25) {
+              svg += `<line x1="${x - 10}" y1="${y + 6}" x2="${x + 10}" y2="${y + 6}" stroke="#000" stroke-width="1.8" />`;
+              svg += `<line x1="${x - 10}" y1="${y + 10}" x2="${x + 10}" y2="${y + 10}" stroke="#000" stroke-width="1.8" />`;
+            }
+
+            // 增時線 (時值大於 1 拍，如二分音符、全音符補 "-")
+            if (n.duration > 1) {
+              const dashes = Math.floor(n.duration) - 1;
+              for (let i = 0; i < dashes; i++) {
+                x += noteSpacing;
+                svg += `<text x="${x}" y="${y - 2}" font-size="24" text-anchor="middle" font-weight="bold">-</text>`;
+              }
+            }
+
+            x += noteSpacing;
+          });
+
+          // 繪製小節線
+          svg += `<line x1="${x}" y1="${y - 25}" x2="${x}" y2="${y + 12}" stroke="#000" stroke-width="1.5" />`;
+          x += 25;
+        });
+      }
+
+      // 終止線 (雙線)
+      svg += `<line x1="${x - 18}" y1="${y - 25}" x2="${x - 18}" y2="${y + 12}" stroke="#000" stroke-width="3" />`;
+      svg += `</svg>`;
+
+      target.innerHTML = svg;
+    }
+  </script>
+</body>
+</html>
