@@ -16,6 +16,7 @@
     .btn:disabled { background: #94a3b8; cursor: not-allowed; }
     .status-bar { margin-top: 15px; font-weight: 500; font-size: 0.95rem; display: flex; align-items: center; gap: 8px; }
     .badge { display: inline-block; padding: 2px 8px; font-size: 0.8rem; font-weight: 600; border-radius: 9999px; background: #e0e7ff; color: #3730a3; }
+    .error-box { margin-top: 15px; padding: 12px; background: #fef2f2; border: 1px solid #fecaca; border-radius: 6px; color: #dc2626; font-size: 0.9rem; word-break: break-all; white-space: pre-wrap; display: none; }
     .score-output { margin-top: 25px; overflow-x: auto; background: #ffffff; border: 1px solid #e2e8f0; border-radius: 8px; padding: 15px; }
   </style>
 </head>
@@ -38,29 +39,56 @@
       <span id="statusText"></span>
       <span class="badge" id="modelBadge" style="display: none;"></span>
     </div>
+    <div class="error-box" id="errorBox"></div>
     <div class="score-output" id="scoreContainer"></div>
   </div>
 
   <script>
     const WORKER_URL = "https://jianpu-omr-api.wandering-poetry-ecb7.workers.dev";
 
-    let selectedBase64 = "";
-    let selectedMimeType = "";
+    let processedBase64 = "";
+    let processedMimeType = "image/jpeg";
 
     function handleFileSelect(event) {
       const file = event.target.files[0];
       if (!file) return;
 
-      selectedMimeType = file.type || "image/jpeg";
       const reader = new FileReader();
-
       reader.onload = function(e) {
-        const fullBase64 = e.target.result;
-        selectedBase64 = fullBase64.split(",")[1];
+        const img = new Image();
+        img.onload = function() {
+          // 前端自動縮圖與壓縮：限制長邊最大 1600px，既保證樂譜清晰度，又大幅縮減 Base64 體積防止超時
+          const maxDim = 1600;
+          let width = img.width;
+          let height = img.height;
 
-        document.getElementById("imagePreview").src = fullBase64;
-        document.getElementById("previewContainer").style.display = "block";
-        document.getElementById("uploadText").innerText = `已選擇：${file.name}`;
+          if (width > maxDim || height > maxDim) {
+            if (width > height) {
+              height = Math.round((height * maxDim) / width);
+              width = maxDim;
+            } else {
+              width = Math.round((width * maxDim) / height);
+              height = maxDim;
+            }
+          }
+
+          const canvas = document.createElement("canvas");
+          canvas.width = width;
+          canvas.height = height;
+          const ctx = canvas.getContext("2d");
+          ctx.drawImage(img, 0, 0, width, height);
+
+          // 壓縮為 JPEG 格式（品質 0.85）
+          const compressedDataUrl = canvas.toDataURL("image/jpeg", 0.85);
+          processedBase64 = compressedDataUrl.split(",")[1];
+          processedMimeType = "image/jpeg";
+
+          document.getElementById("imagePreview").src = compressedDataUrl;
+          document.getElementById("previewContainer").style.display = "block";
+          document.getElementById("uploadText").innerText = `已選擇並優化：${file.name}`;
+          document.getElementById("errorBox").style.display = "none";
+        };
+        img.src = e.target.result;
       };
       reader.readAsDataURL(file);
     }
@@ -69,11 +97,13 @@
       const btn = document.getElementById("convertBtn");
       const statusText = document.getElementById("statusText");
       const modelBadge = document.getElementById("modelBadge");
+      const errorBox = document.getElementById("errorBox");
       const container = document.getElementById("scoreContainer");
 
       btn.disabled = true;
       statusText.innerText = "正在辨識樂譜並轉換首調簡譜中，請稍候...";
       modelBadge.style.display = "none";
+      errorBox.style.display = "none";
       container.innerHTML = "";
 
       try {
@@ -81,12 +111,18 @@
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            imageBase64: selectedBase64,
-            mimeType: selectedMimeType
+            imageBase64: processedBase64,
+            mimeType: processedMimeType
           })
         });
 
-        if (!res.ok) throw new Error(`HTTP 錯誤：${res.status}`);
+        const resData = await res.json().catch(() => ({}));
+
+        if (!res.ok) {
+          // 精確印出後端回傳的錯誤細節
+          const errorMsg = resData.details || resData.error || `HTTP 狀態碼 ${res.status}`;
+          throw new Error(errorMsg);
+        }
 
         const resolvedModel = res.headers.get("X-Resolved-Model");
         if (resolvedModel) {
@@ -94,21 +130,22 @@
           modelBadge.style.display = "inline-block";
         }
 
-        const result = await res.json();
-        
-        const rawText = result.candidates[0].content.parts[0].text;
+        const rawText = resData.candidates[0].content.parts[0].text;
         const scoreData = JSON.parse(rawText);
 
         statusText.innerText = "轉換成功！";
         renderJianpu(scoreData, "scoreContainer");
       } catch (err) {
-        statusText.innerText = `轉換失敗：${err.message}`;
+        statusText.innerText = "轉換失敗";
+        errorBox.innerText = `錯誤詳情：\n${err.message}`;
+        errorBox.style.display = "block";
         console.error(err);
       } finally {
         btn.disabled = false;
       }
     }
 
+    // 簡譜 SVG 渲染排版引擎
     function renderJianpu(data, targetId) {
       const target = document.getElementById(targetId);
       let x = 40;
@@ -117,7 +154,7 @@
 
       let svg = `<svg width="1000" height="300" xmlns="http://www.w3.org/2000/svg" style="font-family: Arial, sans-serif;">`;
       
-      // 標題與調號資訊
+      // 曲名與調號
       svg += `<text x="500" y="35" font-size="22" font-weight="bold" text-anchor="middle">${data.title || "簡譜"}</text>`;
       svg += `<text x="40" y="65" font-size="16" font-weight="500">1 = ${data.key || "C"}   ${data.timeSignature || "4/4"}</text>`;
       
@@ -128,7 +165,7 @@
       if (data.measures && Array.isArray(data.measures)) {
         data.measures.forEach(m => {
           m.notes.forEach(n => {
-            // 繪製音符數字或休止符
+            // 音符或休止符
             svg += `<text x="${x}" y="${y}" font-size="24" text-anchor="middle" font-weight="bold">${n.pitch}</text>`;
 
             // 附點
@@ -136,14 +173,14 @@
               svg += `<circle cx="${x + 12}" cy="${y - 4}" r="2" fill="#000" />`;
             }
 
-            // 高低音點 (octave: 1 為高音, -1 為低音)
+            // 高低音點 (1: 高音, -1: 低音)
             if (n.octave > 0) {
               svg += `<circle cx="${x}" cy="${y - 26}" r="2.5" fill="#000" />`;
             } else if (n.octave < 0) {
               svg += `<circle cx="${x}" cy="${y + 10}" r="2.5" fill="#000" />`;
             }
 
-            // 減時線 (duration: 0.5 單底線, 0.25 雙底線)
+            // 減時線 (0.5: 單底線, 0.25: 雙底線)
             if (n.duration === 0.5) {
               svg += `<line x1="${x - 10}" y1="${y + 6}" x2="${x + 10}" y2="${y + 6}" stroke="#000" stroke-width="1.8" />`;
             } else if (n.duration === 0.25) {
@@ -151,7 +188,7 @@
               svg += `<line x1="${x - 10}" y1="${y + 10}" x2="${x + 10}" y2="${y + 10}" stroke="#000" stroke-width="1.8" />`;
             }
 
-            // 增時線 (時值大於 1 拍，如二分音符、全音符補 "-")
+            // 增時線 (時值大於 1 補 "-")
             if (n.duration > 1) {
               const dashes = Math.floor(n.duration) - 1;
               for (let i = 0; i < dashes; i++) {
@@ -163,13 +200,13 @@
             x += noteSpacing;
           });
 
-          // 繪製小節線
+          // 小節線
           svg += `<line x1="${x}" y1="${y - 25}" x2="${x}" y2="${y + 12}" stroke="#000" stroke-width="1.5" />`;
           x += 25;
         });
       }
 
-      // 終止線 (雙線)
+      // 雙終止線
       svg += `<line x1="${x - 18}" y1="${y - 25}" x2="${x - 18}" y2="${y + 12}" stroke="#000" stroke-width="3" />`;
       svg += `</svg>`;
 
