@@ -26,7 +26,7 @@
     .status-bar { margin-top: 15px; font-weight: 500; font-size: 0.95rem; }
     .error-box { margin-top: 15px; padding: 12px; background: #fef2f2; border: 1px solid #fecaca; border-radius: 6px; color: #dc2626; font-size: 0.9rem; word-break: break-all; white-space: pre-wrap; display: none; }
     
-    /* 簡譜輸出區塊：移除外部淡色框線與陰影 */
+    /* 簡譜輸出區塊：純白無框線與無陰影 */
     .sheet-wrapper { margin-top: 25px; padding: 10px 0; background: #ffffff; border: none; box-shadow: none; }
     .model-info-footer { margin-top: 25px; padding-top: 10px; border-top: 1px solid #e2e8f0; font-size: 0.85rem; color: #64748b; display: flex; align-items: center; justify-content: space-between; }
     .badge { display: inline-block; padding: 2px 10px; font-size: 0.8rem; font-weight: 600; border-radius: 9999px; background: #e0e7ff; color: #3730a3; font-family: monospace; }
@@ -44,9 +44,10 @@
     <div class="preview-container" id="previewContainer">
       <img id="imagePreview" class="preview-img" alt="樂譜預覽">
       
+      <!-- 打譜者輸入欄位 -->
       <div class="input-row">
         <label for="arrangerInput" style="font-weight: 500;">打譜者姓名：</label>
-        <input type="text" id="arrangerInput" class="text-input" placeholder="例如：陳羿帆" value="">
+        <input type="text" id="arrangerInput" class="text-input" placeholder="例如：陳大明" value="">
       </div>
 
       <button class="btn" id="convertBtn" onclick="startConvert()">開始轉換為簡譜</button>
@@ -60,6 +61,7 @@
     <div id="exportableSheet" class="sheet-wrapper" style="display: none;">
       <div id="scoreContainer"></div>
       
+      <!-- 引擎與生成時間資訊列（PDF 匯出時會自動隱藏） -->
       <div class="model-info-footer" id="modelFooter">
         <span>樂譜辨識轉換引擎：<span class="badge" id="usedModelBadge"></span></span>
         <span id="genTimestamp"></span>
@@ -110,6 +112,7 @@
       }
     });
 
+    // 打譜者姓名輸入時即時更新畫面
     arrangerInput.addEventListener("input", () => {
       if (currentScoreData) {
         renderMultiLineJianpu(currentScoreData, "scoreContainer");
@@ -213,6 +216,7 @@
       }
     }
 
+    // 音符相容解析函式（全面支援物件及字串編碼）
     function parseNoteToken(token) {
       if (!token) return { pitch: "0", octave: 0, duration: 1, dotted: false };
 
@@ -257,25 +261,30 @@
       return { pitch, octave, duration, dotted };
     }
 
-    // 放大版樂譜排版引擎（適配 A4 滿版尺寸）
+    // 整合 MusicXML 拍數基準校準與大尺寸滿版排版引擎
     function renderMultiLineJianpu(data, targetId) {
       const target = document.getElementById(targetId);
-      const pageWidth = 1080; // 放大樂譜畫布寬度
+      const pageWidth = 1080;
       const marginX = 35;
       const measuresPerLine = 4;
       const measureWidth = (pageWidth - marginX * 2) / measuresPerLine;
-      const lineHeight = 105; // 增加行距提供更多空間
+      const lineHeight = 105;
 
       const rawMeasures = data.m || data.measures || [];
       const totalLines = Math.ceil(rawMeasures.length / measuresPerLine) || 1;
       const totalSvgHeight = 150 + totalLines * lineHeight + 20;
 
+      // 借鑑 MusicXML：解析拍號計算每小節標準基準拍數
+      const timeSig = String(data.timeSignature || "4/4");
+      const sigParts = timeSig.split("/");
+      const beatsPerMeasure = parseFloat(sigParts[0]) || 4;
+
       let svg = `<svg id="jianpuSvg" width="${pageWidth}" height="${totalSvgHeight}" viewBox="0 0 ${pageWidth} ${totalSvgHeight}" xmlns="http://www.w3.org/2000/svg" style="font-family: Arial, sans-serif; background: #ffffff; width: 100%; height: auto; display: block;">`;
       
-      // 1. 曲目名稱（加大字體）
+      // 1. 曲目名稱
       svg += `<text x="${pageWidth / 2}" y="42" font-size="28" font-weight="bold" text-anchor="middle">${data.title || "簡譜"}</text>`;
 
-      // 2. 打譜者資訊（加大字體）
+      // 2. 打譜者資訊（標題下方右側）
       const arrangerName = (document.getElementById("arrangerInput").value || "").trim();
       if (arrangerName) {
         svg += `<text x="${pageWidth - marginX}" y="78" font-size="16" font-weight="500" text-anchor="end" fill="#222222">${arrangerName} 打譜</text>`;
@@ -285,12 +294,9 @@
       const keyText = `1 = ${data.key || "C"}`;
       svg += `<text x="${marginX}" y="108" font-size="19" font-weight="bold">${keyText}</text>`;
 
-      // 4. 拍號上下排列與中間橫線
-      const timeSig = String(data.timeSignature || "4/4");
-      const sigParts = timeSig.split("/");
+      // 4. 拍號垂直分列排版（上分子、中間橫線、下分母）
       const topNum = sigParts[0] || "4";
       const bottomNum = sigParts[1] || "4";
-
       const timeSigX = marginX + keyText.length * 12 + 18; 
       const timeSigCenterY = 103;
 
@@ -322,6 +328,7 @@
 
         const parsedNotes = rawNotes.map(parseNoteToken);
 
+        // 增時線 (-) 槽位分離
         const visualSlots = [];
         parsedNotes.forEach(n => {
           visualSlots.push({
@@ -335,39 +342,33 @@
           if (n.duration > 1) {
             const extraDashes = Math.floor(n.duration) - 1;
             for (let d = 0; d < extraDashes; d++) {
-              visualSlots.push({
-                type: "dash"
-              });
+              visualSlots.push({ type: "dash" });
             }
           }
         });
 
-        const slotCount = Math.max(visualSlots.length, 1);
+        // MusicXML 拍數底線對齊：槽位數不少於拍號容量
+        const slotCount = Math.max(visualSlots.length, beatsPerMeasure, 1);
         const slotWidth = (measureWidth - 24) / slotCount;
 
         visualSlots.forEach((slot, idx) => {
           const itemX = startX + 12 + idx * slotWidth + (slotWidth / 2);
 
           if (slot.type === "dash") {
-            // 增時線 (-)
             svg += `<text x="${itemX}" y="${lineY - 3}" font-size="28" text-anchor="middle" font-weight="bold">-</text>`;
           } else {
-            // 音符文字（加大至 28px）
             svg += `<text x="${itemX}" y="${lineY}" font-size="28" text-anchor="middle" font-weight="bold">${slot.pitch}</text>`;
 
-            // 附點
             if (slot.dotted) {
               svg += `<circle cx="${itemX + 14}" cy="${lineY - 5}" r="2.5" fill="#000" />`;
             }
 
-            // 高低音點
             if (slot.octave > 0) {
               svg += `<circle cx="${itemX}" cy="${lineY - 30}" r="2.8" fill="#000" />`;
             } else if (slot.octave < 0) {
               svg += `<circle cx="${itemX}" cy="${lineY + 13}" r="2.8" fill="#000" />`;
             }
 
-            // 減時線
             if (slot.duration === 0.5) {
               svg += `<line x1="${itemX - 11}" y1="${lineY + 8}" x2="${itemX + 11}" y2="${lineY + 8}" stroke="#000" stroke-width="2.2" />`;
             } else if (slot.duration === 0.25) {
@@ -391,7 +392,7 @@
       target.innerHTML = svg;
     }
 
-    // PDF 匯出（完全無框線、加大滿版置中）
+    // PDF 匯出函式（純淨置中、無框線、滿版 A4）
     async function exportToPdf() {
       const sheetElement = document.getElementById("exportableSheet");
       const modelFooter = document.getElementById("modelFooter");
@@ -400,7 +401,7 @@
       pdfBtn.disabled = true;
       pdfBtn.innerText = "正在產出 PDF...";
 
-      // 暫時隱藏資訊欄
+      // 截圖前暫時隱藏引擎與時間資訊列
       modelFooter.style.display = "none";
 
       try {
@@ -418,7 +419,7 @@
         const pageWidth = pdf.internal.pageSize.getWidth(); // 210mm
         const pageHeight = pdf.internal.pageSize.getHeight(); // 297mm
 
-        // 縮小邊距至 10mm，使放大的樂譜充分填滿 A4 頁面
+        // 保留 10mm 邊界進行水平置中排版
         const margin = 10;
         const printWidth = pageWidth - (margin * 2); // 190mm
         const printHeight = (canvas.height * printWidth) / canvas.width;
